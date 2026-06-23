@@ -34,4 +34,5 @@ def index():
     return render_template("index.html", table_html=None)
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    # Setting host to 0.0.0.0 opens the server up to your local Wi-Fi network
+    app.run(host="0.0.0.0", port=5000, debug=True)
