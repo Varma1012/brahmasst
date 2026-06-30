@@ -1,38 +1,291 @@
-from flask import Flask, render_template, request
-# Import your custom task module from the tasks folder
-from tasks.data_cleaner import parse_and_clean_bed
+from flask import (
+    Flask,
+    render_template,
+    request,
+    session
+)
+
+from tasks.genome_loader import (
+    save_uploaded_file
+)
+
+from tasks.gff_engine import (
+    parse_species_and_sex,
+    search_gene
+)
+
+from tasks.compare_engine import (
+    compare_traits
+)
+
 
 app = Flask(__name__)
 
-@app.route("/", methods=["GET", "POST"])
+app.secret_key = "genome_key"
+
+
+@app.route(
+    "/",
+    methods=["GET", "POST"]
+)
 def index():
-    if request.method == "POST":
-        if "bed_file" not in request.files:
-            return render_template("index.html", error="No file selected.")
-            
-        file = request.files["bed_file"]
-        species_name = request.form.get("species_name", "Unknown Species")
-        chrom_format = request.form.get("chrom_format", ".*")
-        
-        if file.filename == "":
-            return render_template("index.html", error="No file selected.")
-            
-        try:
-            # Execute the isolated task from your tasks folder
-            cleaned_df = parse_and_clean_bed(file, species_name, chrom_format)
-            
-            if cleaned_df.empty:
-                return render_template("index.html", error="No rows matched your chromosome format pattern!")
-                
-            # Convert to HTML presentation layer
-            table_html = cleaned_df.to_html(classes="table table-bordered table-striped mt-3", index=False)
-            return render_template("index.html", table_html=table_html, species=species_name)
-            
-        except Exception as e:
-            return render_template("index.html", error=f"Processing Error: {str(e)}")
-            
-    return render_template("index.html", table_html=None)
+
+    profile = session.get(
+        "profile"
+    )
+
+    processing_complete = session.get(
+        "processing_complete",
+        False
+    )
+
+    parent2_ready = session.get(
+        "parent2_ready",
+        False
+    )
+
+    gene_result = []
+
+    comparison = []
+
+    error = None
+
+    try:
+
+        if request.method == "POST":
+
+            # ====================
+            # FIRST GENOME
+            # ====================
+
+            if "genome_file" in request.files:
+
+                file = request.files[
+                    "genome_file"
+                ]
+
+                if (
+                    file.filename == ""
+                ):
+                    raise Exception(
+                        "Select genome"
+                    )
+
+                session.clear()
+
+                print(
+                    "[DEBUG] Parent1 upload"
+                )
+
+                path = (
+                    save_uploaded_file(
+                        file,
+                        "parent1"
+                    )
+                )
+
+                species, sex = (
+                    parse_species_and_sex(
+                        path
+                    )
+                )
+
+                profile = {
+
+                    "species":
+                    species,
+
+                    "sex":
+                    sex
+                }
+
+                session[
+                    "profile"
+                ] = profile
+
+                session[
+                    "uploaded_file"
+                ] = path
+
+                session[
+                    "processing_complete"
+                ] = True
+
+                processing_complete = True
+
+            # ====================
+            # SECOND GENOME
+            # ====================
+
+            elif "partner_file" in request.files:
+
+                file = request.files[
+                    "partner_file"
+                ]
+
+                if (
+                    file.filename == ""
+                ):
+                    raise Exception(
+                        "Select second genome"
+                    )
+
+                print(
+                    "[DEBUG] Parent2 upload"
+                )
+
+                path = (
+                    save_uploaded_file(
+                        file,
+                        "parent2"
+                    )
+                )
+
+                session[
+                    "partner_file"
+                ] = path
+
+                session[
+                    "parent2_ready"
+                ] = True
+
+                parent2_ready = True
+
+            # ====================
+            # GENE SEARCH
+            # ====================
+
+            elif request.form.get(
+                "gene"
+            ):
+
+                genes = (
+                    request.form
+                    .get(
+                        "gene"
+                    )
+                    .strip()
+                )
+
+                path = session.get(
+                    "uploaded_file"
+                )
+
+                for gene in [
+
+                    x.strip()
+
+                    for x
+                    in genes.split(",")
+
+                    if x.strip()
+
+                ]:
+
+                    result = (
+                        search_gene(
+                            path,
+                            gene
+                        )
+                    )
+
+                    if not result:
+
+                        result = {
+
+                            "found":
+                            False
+                        }
+
+                    result[
+                        "gene"
+                    ] = gene
+
+                    gene_result.append(
+                        result
+                    )
+
+            # ====================
+            # COMPARE
+            # ====================
+
+            elif request.form.get(
+                "compare"
+            ):
+
+                p1 = session.get(
+                    "uploaded_file"
+                )
+
+                p2 = session.get(
+                    "partner_file"
+                )
+
+                if not p1:
+
+                    raise Exception(
+                        "Genome 1 missing"
+                    )
+
+                if not p2:
+
+                    raise Exception(
+                        "Genome 2 missing"
+                    )
+
+                comparison = (
+                    compare_traits(
+                        p1,
+                        p2
+                    )
+                )
+
+    except Exception as e:
+
+        error = str(
+            e
+        )
+
+        print(
+            "\n[ERROR]"
+        )
+
+        print(
+            error
+        )
+
+    return render_template(
+
+        "index.html",
+
+        profile=profile,
+
+        processing_complete=processing_complete,
+
+        parent2_ready=parent2_ready,
+
+        gene_result=gene_result,
+
+        comparison=comparison,
+
+        error=error
+    )
+
+
+@app.route(
+    "/reset"
+)
+def reset():
+
+    session.clear()
+
+    return render_template(
+        "index.html"
+    )
+
 
 if __name__ == "__main__":
-    # Setting host to 0.0.0.0 opens the server up to your local Wi-Fi network
-    app.run(host="0.0.0.0", port=5000, debug=True)
+
+    app.run(
+        debug=True
+    )
